@@ -16,6 +16,8 @@
 //   "viewport": { "width": 1400, "height": 900 },
 //   "banner": { "text": "修正後", "color": "green" },  // 帯の札(省略時は label と labels から決める。null で札なし)
 //   "labels": { "before": { "text": "Before", "color": "red" } },  // label → 帯の札の対応を足す・変える(省略可)
+//   "bannerPos": "auto",                    // 帯の位置(動画)。auto(既定)は上端に出し、注釈・前提・操作する場所が帯に隠れるなら
+//                                           // 下端へ移す。top / bottom で固定する。pages[].bannerPos で画面ごとにも指定できる
 //   "hold": 4000,                           // 1画面を見せる時間(ms)。枠・吹き出しを出してから暗転までの長さ。pages[].hold で画面ごとにも指定できる。
 //                                           // 吹き出しの文字数から決まる「読める長さ」(readableMs。3〜8 秒)より短い値は、その長さに延ばす
 //   "shotAt": 300,                          // スクショを撮る時点(枠・吹き出しを出してからの ms。既定は hold と同じ)。操作の直後の状態を
@@ -99,6 +101,8 @@ async function login(page, base, { url, actions, waitUrlNot, waitText }) {
 async function pointAt(page, loc) {
   const box = await loc.boundingBox();
   if (!box) return;
+  // クリックで開いたメニューの項目など、操作する場所が後から帯の下に出ることがあるので、動かす前に帯をよける
+  await page.evaluate((b) => window.__annot.avoid([b]), box);
   await page.evaluate(([x, y]) => window.__annot.cursorTo(x, y), [box.x + box.width / 2, box.y + box.height / 2]);
   await page.evaluate(() => window.__annot.clickMark());
 }
@@ -181,6 +185,25 @@ function readableMs({ annotate, notes }) {
   return Math.min(5000, Math.max(3000, 1500 + text.length * 100));
 }
 
+// 帯を出した時点で画面にある、見せる対象(注釈・前提の対象と、操作する場所)の位置(ビューポート座標)。
+// 録画を始める前に帯をよけておき、録画の途中で帯が動くことを減らす。まだ出ていない要素は、描いたとき・操作するときによける
+async function targetBoxes(page, p) {
+  const specs = [...(p.annotate || []), ...(p.premise ? [p.premise] : [])].map((a) => ({ target: a.target, text: a.text }));
+  const boxes = await page.evaluate((ts) => ts.flatMap((t) => {
+    try {
+      const r = window.__annot.find(t.target, t.text)?.getBoundingClientRect();
+      return r ? [{ x: r.x, y: r.y, width: r.width, height: r.height }] : [];
+    } catch {
+      return [];
+    }
+  }), specs);
+  for (const sel of (p.actions || []).flatMap((a) => [a.click, a.fill?.[0], a.hover]).filter(Boolean)) {
+    const box = await page.locator(sel).first().boundingBox({ timeout: 1000 }).catch(() => null);
+    if (box) boxes.push(box);
+  }
+  return boxes;
+}
+
 async function readTexts(page, sels) {
   const read = {};
   for (const sel of sels || []) {
@@ -233,7 +256,7 @@ async function main() {
         title: p.title, caption: p.caption, annotate: p.annotate, notes: p.notes, clip: p.clip,
         numbered: p.numbered, spotlight: p.spotlight,
       };
-      const banner = { banner: p.banner === undefined ? bannerSpec : p.banner };
+      const banner = { banner: p.banner === undefined ? bannerSpec : p.banner, pos: p.bannerPos ?? config.bannerPos ?? "auto" };
 
       if (recordVideo) {
         // 観点(画面)ごとに: 暗転から明けて帯がスライドイン → (操作があればカーソル付きで操作) → 枠・吹き出し → 暗転
@@ -247,6 +270,7 @@ async function main() {
         };
         if (annotated || p.title || p.caption) await page.evaluate(([s, o]) => window.__annot.showBanner(s, o), [spec, banner]);
         if (!p.actions?.length) await drawAnnotations();
+        await page.evaluate((bs) => window.__annot.avoid(bs, { instant: true }), await targetBoxes(page, p));
         await page.evaluate((cover) => window.__annot.prepareEnter({ cover }), index > 0);
         await recorder.resume();
         await page.evaluate(() => window.__annot.enter());
@@ -261,7 +285,7 @@ async function main() {
           const reinject = async () => {
             if (await page.evaluate(() => Boolean(window.__annot))) return;
             await inject();
-            await page.evaluate(([s, o]) => window.__annot.showBanner(s, o), [spec, banner]);
+            await page.evaluate(([s, o]) => window.__annot.showBanner(s, o), [spec, { ...banner, keepEdge: true }]);
           };
           await runActions(page, p.actions, { cursor: true, recorder, beforeResume: reinject });
           await page.evaluate(() => window.__annot?.clearPremise());

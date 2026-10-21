@@ -4,6 +4,7 @@
 //   window.__annot.apply(spec)          … 全注釈を描き、切り抜き範囲を返す
 // 証跡取得モード（修正前後。capture.js が録画の区間に合わせて呼ぶ）:
 //   window.__annot.showBanner(spec, o)  … 帯（修正前/修正後の札・見出し・何を見る画面かの一文）を出す
+//   window.__annot.avoid(rects)         … 帯が rects（ビューポート座標）を隠すなら、帯を画面下端へ移す
 //   window.__annot.draw(spec)           … 枠・番号・吹き出し・スポットライトを一度に描く
 //   window.__annot.pulse()              … 枠を数回脈打たせる（録画の開始時に呼んで目を引く）
 //   window.__annot.shot()               … 帯を切り抜き範囲の上に寄せ、スクショ用の切り抜き範囲を返す
@@ -56,7 +57,7 @@ window.__annot = (() => {
       @keyframes __annotPulse { 0% { box-shadow: 0 0 0 0 var(--annot-c); } 80% { box-shadow: 0 0 0 16px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
       .__annot-pulse { animation: __annotPulse 1.1s ease-out 3; }
       @keyframes __annotRipple { from { transform: translate(-50%,-50%) scale(.3); opacity: .9; } to { transform: translate(-50%,-50%) scale(1.6); opacity: 0; } }
-      .__annot-banner { transition: transform .5s ease-out; }
+      .__annot-banner { transition: top .45s ease-in-out, transform .5s ease-out; }
       .__annot-cover { position: fixed; inset: 0; background: #000; z-index: 2147483646; pointer-events: none; transition: opacity .4s; }
       .__annot-cursor { position: fixed; left: 0; top: 0; z-index: 2147483647; pointer-events: none; transition: left .35s ease-in-out, top .35s ease-in-out, opacity .3s; }
     `;
@@ -83,7 +84,7 @@ window.__annot = (() => {
       boxSizing: "border-box", zIndex: 99998, pointerEvents: "none",
     });
     d.style.setProperty("--annot-c", c + "aa");
-    d.classList.add("__annot-box");
+    d.classList.add("__annot-box", "__annot-mark");
     add(d);
     if (num != null) {
       const b = document.createElement("div");
@@ -91,6 +92,7 @@ window.__annot = (() => {
       Object.assign(b.style, { position: "absolute", left: r.x - 20 + "px", top: r.y - 20 + "px", zIndex: 99999, pointerEvents: "none" });
       b.firstChild.style.boxShadow = "0 0 0 2px #fff, 0 2px 6px rgba(0,0,0,.35)";
       b.firstChild.style.margin = "0";
+      b.classList.add("__annot-mark");
       add(b);
     }
     return d;
@@ -105,6 +107,7 @@ window.__annot = (() => {
       boxShadow: "0 3px 10px rgba(0,0,0,.25)", zIndex: 99999, pointerEvents: "none",
     });
     d.innerHTML = (num != null ? badgeHtml(num, c) : "") + html;
+    d.classList.add("__annot-mark");
     return add(d);
   }
   function arrow(x1, y1, x2, y2, c) {
@@ -202,7 +205,8 @@ window.__annot = (() => {
     const b = document.querySelector(".__annot-banner");
     if (b) {
       b.dataset.fixedCss = b.style.cssText;
-      Object.assign(b.style, { position: "absolute", right: "auto", left: u.x + "px", width: u.w + "px", top: "0px" });
+      // 帯の移動アニメーションを止めてから置く(動いている途中の位置を測ってしまうため)
+      Object.assign(b.style, { transition: "none", position: "absolute", right: "auto", left: u.x + "px", width: u.w + "px", top: "0px" });
       // 対象がページ最上部にある(モーダル等)と上に置く余白がなく帯が切れるので、そのときは対象の下に置く
       const above = u.y - rect(b).h - 14;
       b.style.top = (above >= 0 ? above : u.y + u.h + 14) + "px";
@@ -226,9 +230,14 @@ window.__annot = (() => {
   }
 
   // 画面上部の帯: [修正前/修正後] 見出し ／ 何を見る画面かの一文
-  function showBanner(spec, { banner } = {}) {
+  // pos: "auto"（既定。隠す対象があれば下端へ移す） / "top" / "bottom"（固定）。
+  // keepEdge は操作で画面が再読み込みされたときの出し直しで、それまでの位置（下端へ移したか）を引き継ぐ
+  function showBanner(spec, { banner, pos = "auto", keepEdge = false } = {}) {
     reset();
     scrollTo({ top: 0 });
+    edgeFixed = pos !== "auto";
+    edge = pos === "bottom" || (keepEdge && !edgeFixed && savedEdge() === "bottom") ? "bottom" : "top";
+    saveEdge();
     if (banner || spec.title || spec.caption) {
       const d = document.createElement("div");
       const c = color(banner?.color || "gray");
@@ -244,7 +253,39 @@ window.__annot = (() => {
         (spec.caption ? `<span>${spec.caption}</span>` : "") + `</span>`;
       d.classList.add("__annot-banner");
       add(d);
+      placeBanner(d, false);
     }
+  }
+  // 帯の位置。上端の帯は、ページ最上部のツールバーやメニューを覆ってしまう。対象が帯に隠れるときは帯のほうを
+  // 下端へ移す（画面を動かしたり帯を透かしたりすると、対象の見え方そのものが変わってしまうため）。
+  // 1 画面の中で帯が上下を行き来すると目障りなので、下端へ移したらその画面の間は戻さない
+  let edge = "top", edgeFixed = false;
+  const EDGE_KEY = "__annotBannerEdge";
+  function savedEdge() { try { return sessionStorage.getItem(EDGE_KEY); } catch { return null; } }
+  function saveEdge() { try { sessionStorage.setItem(EDGE_KEY, edge); } catch {} }
+  function placeBanner(b, animate) {
+    if (!animate) b.style.transition = "none";
+    b.style.top = edge === "top" ? "0px" : innerHeight - b.offsetHeight + "px";
+    if (!animate) { void b.offsetWidth; b.style.transition = ""; }
+    placeTimer();
+  }
+  function avoid(rs, { instant = false } = {}) {
+    const b = document.querySelector(".__annot-banner");
+    if (!b || edgeFixed || edge === "bottom") return edge;
+    const h = b.offsetHeight + 8;
+    // 帯の帯域（上端・下端）と重なる面積。上下どちらにも重なるなら、重なりの小さいほうに置く
+    const covered = (top, bottom) => rs.reduce((sum, r) =>
+      sum + Math.max(0, Math.min(r.y + r.height, bottom) - Math.max(r.y, top)) * Math.max(0, r.width), 0);
+    const atTop = covered(0, h);
+    if (!atTop || covered(innerHeight - h, innerHeight) >= atTop) return edge;
+    edge = "bottom";
+    saveEdge();
+    placeBanner(b, !instant);
+    return edge;
+  }
+  // 描いた枠・番号・吹き出しが帯に隠れないようにする
+  function avoidMarks() {
+    return avoid([...document.querySelectorAll(".__annot-mark")].map((e) => e.getBoundingClientRect()));
   }
   function draw(spec) {
     ensureStyle();
@@ -252,6 +293,7 @@ window.__annot = (() => {
       numbered: spec.numbered ?? (spec.annotate || []).length > 1,
       spot: spec.spotlight !== false,
     });
+    if (!missing.length) avoidMarks();
     return { missing };
   }
   // 前提条件の枠と吹き出し。検索などの操作をしている間だけ出し、操作が終わったら clearPremise で消す
@@ -264,6 +306,7 @@ window.__annot = (() => {
     const before = new Set(document.querySelectorAll(".__annot"));
     drawOne({ color: p.color || "blue", pos: p.pos || "below", width: p.width || 560, x: p.x, note: `<b>前提</b>：${p.note}` }, el, null);
     document.querySelectorAll(".__annot").forEach((e) => { if (!before.has(e)) e.classList.add("__annot-premise"); });
+    avoidMarks();
     return { missing: [] };
   }
   function clearPremise() {
@@ -282,7 +325,12 @@ window.__annot = (() => {
   // スクショ用に寄せた帯を、固定表示に戻す
   function undock() {
     const b = document.querySelector(".__annot-banner");
-    if (b?.dataset.fixedCss) b.style.cssText = b.dataset.fixedCss;
+    if (!b?.dataset.fixedCss) return;
+    // 戻す動きを録画に映さないよう、アニメーションなしで戻す
+    b.style.cssText = b.dataset.fixedCss;
+    b.style.transition = "none";
+    void b.offsetWidth;
+    b.style.transition = "";
   }
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
   // 観点（ユースケース）の切り替わりが分かるよう、暗転から明けて帯をスライドインさせる
@@ -299,14 +347,14 @@ window.__annot = (() => {
       c?.remove();
     }
     const b = document.querySelector(".__annot-banner");
-    if (b) { b.style.transition = "none"; b.style.transform = "translateY(-110%)"; }
+    if (b) { b.style.transition = "none"; b.style.transform = edge === "top" ? "translateY(-110%)" : "translateY(110%)"; }
   }
   async function enter() {
     const c = document.querySelector(".__annot-cover");
     const b = document.querySelector(".__annot-banner");
     void document.body.offsetWidth;
     if (c) { c.style.transition = "opacity .4s"; c.style.opacity = "0"; await wait(250); }
-    if (b) { b.style.transition = "transform .5s ease-out"; b.style.transform = "translateY(0)"; }
+    if (b) { b.style.transition = ""; b.style.transform = "translateY(0)"; }
     await wait(550);
     c?.remove();
   }
@@ -367,13 +415,13 @@ window.__annot = (() => {
     document.querySelector(".__annot-timer")?.remove();
     const d = document.createElement("div");
     d.className = "__annot-timer";
-    const b = document.querySelector(".__annot-banner");
     Object.assign(d.style, {
-      position: "fixed", right: "24px", top: (b ? b.getBoundingClientRect().bottom : 0) + 12 + "px", zIndex: 100001,
+      position: "fixed", right: "24px", zIndex: 100001,
       background: "rgba(25,25,25,.92)", color: "#fff", padding: "10px 18px", borderRadius: "8px", minWidth: "260px",
       font: `700 15px/1.4 ${FONT}`, boxShadow: "0 3px 12px rgba(0,0,0,.35)", pointerEvents: "none", textAlign: "right",
     });
     document.documentElement.appendChild(d);
+    placeTimer();
     const max = o.maxMs ?? 15000, u = o.until || {};
     // 数え始めは、ページが実際にクリックを受け取った瞬間(Playwright はクリックの前にボタンが止まるのを待つので、
     // 呼んだ時点から数えるとその待ちまで測ってしまう)
@@ -428,6 +476,14 @@ window.__annot = (() => {
       tick();
     }, { capture: true, once: true });
   }
+  // タイマーは帯のすぐ内側（帯が上端なら帯の下、下端なら帯の上）に置く
+  function placeTimer() {
+    const d = document.querySelector(".__annot-timer");
+    if (!d) return;
+    const b = document.querySelector(".__annot-banner");
+    const h = b ? b.offsetHeight : 0;
+    Object.assign(d.style, edge === "top" ? { top: h + 12 + "px", bottom: "auto" } : { top: "auto", bottom: h + 12 + "px" });
+  }
   function timerState() {
     return timer && { done: timer.done, value: timer.value, elapsed: timer.t0 == null ? 0 : performance.now() - timer.t0 };
   }
@@ -435,5 +491,5 @@ window.__annot = (() => {
     document.querySelector(".__annot-timer")?.remove();
     timer = null;
   }
-  return { apply, showBanner, draw, showPremise, clearPremise, pulse, shot, undock, prepareEnter, enter, leave, cursorTo, clickMark, hideCursor, startTimer, timerState, clearTimer, rect, union, find, color };
+  return { apply, showBanner, avoid, draw, showPremise, clearPremise, pulse, shot, undock, prepareEnter, enter, leave, cursorTo, clickMark, hideCursor, startTimer, timerState, clearTimer, rect, union, find, color };
 })();
