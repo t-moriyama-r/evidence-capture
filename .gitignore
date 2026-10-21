@@ -1,0 +1,19 @@
+# 撮影の config(パスワードやテストアカウントを含みうる)と証跡はコミットしない
+*.json
+!package.json
+*.png
+*.jpg
+*.webm
+*.mp4
+evidence/
+annot/
+
+# 秘密情報・環境
+.env
+.env.*
+*.pem
+*.key
+
+node_modules/
+.DS_Store
+Thumbs.db
