@@ -13,6 +13,8 @@
 //   "port": 9330,                           // CDP ポート(同時実行する場合はずらす)
 //   "video": true,                          // 動画を録るか(省略時 true)
 //   "ignoreHTTPSErrors": true,              // 開発サーバーの自己署名証明書を通すか(省略時 true。localhost 以外を撮るなら false 推奨)
+//   "profile": "<Chrome のプロファイルのディレクトリ>", // ログイン済みのプロファイルで撮る(省略時は使い捨て)。GitHub の Actions のログなど、
+//                                           // ログインしないと見られない画面に使う。github-attach.js login のプロファイルを指定できる
 //   "viewport": { "width": 1400, "height": 900 },
 //   "banner": { "text": "修正後", "color": "green" },  // 帯の札(省略時は label と labels から決める。null で札なし)
 //   "labels": { "before": { "text": "Before", "color": "red" } },  // label → 帯の札の対応を足す・変える(省略可)
@@ -229,12 +231,18 @@ async function main() {
 
   fs.mkdirSync(outDir, { recursive: true });
   const ignoreHTTPSErrors = config.ignoreHTTPSErrors !== false;
-  const chrome = await launchChrome({ port: config.port || 9330, viewport, ignoreCertErrors: ignoreHTTPSErrors });
+  const chrome = await launchChrome({ port: config.port || 9330, viewport, ignoreCertErrors: ignoreHTTPSErrors, profile: config.profile });
   const results = [];
   try {
     // 注釈の切り抜き座標(CSS ピクセル)と画像の座標を一致させる
-    const context = await chrome.newContext({ ignoreHTTPSErrors, viewport, deviceScaleFactor: 1 });
+    // profile を使うときは、そのログイン状態(Cookie)を持つ既定のコンテキストで開く。新しいコンテキストには Cookie が無い
+    const context = config.profile
+      ? chrome.browser.contexts()[0]
+      : await chrome.newContext({ ignoreHTTPSErrors, viewport, deviceScaleFactor: 1 });
     const page = await context.newPage();
+    if (config.profile) await page.setViewportSize(viewport);
+    // 注釈は addScriptTag で注入するので、CSP でインラインのスクリプトを禁じているサイト(GitHub など)でも描けるようにする
+    await (await context.newCDPSession(page)).send("Page.setBypassCSP", { enabled: true });
     const recorder = recordVideo ? await createRecorder(page, viewport) : null;
     if (config.login) await login(page, baseUrl, config.login);
 

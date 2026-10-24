@@ -37,6 +37,7 @@ Playwright MCP は使わない(MCP では録画できず、MCP のブラウザ�
 - 録画用 ffmpeg: 初回に `capture.js` がエラーで導入コマンド(`node <playwright-core>/cli.js install ffmpeg`)を示すので、それを実行する
 - **出力先・config.json はリポジトリの外の一時ディレクトリ**(Claude Code のセッション scratchpad など)に置く。証跡はコミットしない
 - パスワードなどの秘密は config に書かず、`"${env:名前}"` で環境変数から渡す(ステップE2)
+- ログインしないと見られない外部サイトの画面(GitHub の Actions のログなど)は、config の `"profile"` にログイン済みの Chrome のプロファイルを指定して撮る(`github-attach.js login` のプロファイルを使える)。CSP でインラインのスクリプトを禁じているサイトでも注釈を描けるよう、capture.js は CSP を無視して開く
 
 ## プロジェクト固有の情報(このスキルには書かない)
 
