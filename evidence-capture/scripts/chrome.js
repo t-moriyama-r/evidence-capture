@@ -4,7 +4,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const isWin = process.platform === "win32";
@@ -112,20 +112,38 @@ async function launchChrome({ port, viewport, profile: keepProfile, headless = t
   return { browser, newContext, close };
 }
 
-// Playwright がインストールする録画用 ffmpeg(mjpeg の読み込みと vp8 の書き出しができる)
-function findFfmpeg() {
+// Playwright がインストールする録画用 ffmpeg(mjpeg を読み、webm を書き出す)。
+// 同梱の ffmpeg は Playwright の版によって VP8 だけ・VP9 だけを持ち(読み書きとも)、合わない版を
+// 選ぶと write EOF などで落ちる。新しい版から順に、webm を書き出せるもの(decodes を渡したときは、
+// そのコーデックを読めるもの)を選ぶ。
+function findFfmpeg({ decodes } = {}) {
   const base = process.env.PLAYWRIGHT_BROWSERS_PATH
     || (isWin
       ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData/Local"), "ms-playwright")
       : isMac
         ? path.join(os.homedir(), "Library/Caches/ms-playwright")
         : path.join(os.homedir(), ".cache/ms-playwright"));
-  const dir = fs.existsSync(base) ? fs.readdirSync(base).filter((d) => d.startsWith("ffmpeg-")).sort().pop() : null;
-  const exe = dir && ["ffmpeg-win64.exe", "ffmpeg-mac", "ffmpeg-linux"].map((f) => path.join(base, dir, f)).find((p) => fs.existsSync(p));
+  const dirs = fs.existsSync(base) ? fs.readdirSync(base).filter((d) => d.startsWith("ffmpeg-")).sort().reverse() : [];
+  const exe = dirs
+    .map((dir) => ["ffmpeg-win64.exe", "ffmpeg-mac", "ffmpeg-linux"].map((f) => path.join(base, dir, f)).find((p) => fs.existsSync(p)))
+    .find((p) => p && (decodes ? ffmpegCodecs(p, "-decoders").includes(decodes) : webmCodec(p)));
   if (!exe) {
-    throw new Error(`録画用の ffmpeg がありません。次を実行してから再実行してください:\n  node "${path.join(resolvePlaywrightCore(), "cli.js")}" install ffmpeg`);
+    const what = decodes ? `${decodes} の動画を読める` : "webm を書き出せる";
+    throw new Error(`${what}録画用の ffmpeg がありません。次を実行してから再実行してください:
+  node "${path.join(resolvePlaywrightCore(), "cli.js")}" install ffmpeg`);
   }
   return exe;
+}
+
+// その ffmpeg が書き出せる webm の映像コーデック(vp8 を優先)。どちらも無ければ undefined
+function webmCodec(exe) {
+  const codecs = ffmpegCodecs(exe, "-encoders");
+  return ["vp8", "vp9"].find((c) => codecs.includes(c));
+}
+
+function ffmpegCodecs(exe, flag) {
+  const r = spawnSync(exe, ["-hide_banner", flag], { encoding: "utf8" });
+  return [...`${r.stdout || ""}${r.stderr || ""}`.matchAll(/\(codec (\w+)\)/g)].map((m) => m[1]);
 }
 
 // 区間だけを録る録画。resume() 〜 pause() の間の画面だけを動画にし、間(ページの読み込み中など)は詰める。
@@ -156,9 +174,10 @@ async function createRecorder(page, viewport) {
       if (current) await this.pause();
       const fps = 25;
       const { width, height } = viewport;
-      const ff = spawn(findFfmpeg(), [
+      const exe = findFfmpeg();
+      const ff = spawn(exe, [
         "-loglevel", "error", "-f", "image2pipe", "-framerate", String(fps), "-c:v", "mjpeg", "-i", "pipe:0", "-y", "-an",
-        "-c:v", "vp8", "-qmin", "0", "-qmax", "50", "-crf", "8", "-deadline", "realtime", "-speed", "8", "-b:v", "1M",
+        "-c:v", webmCodec(exe), "-qmin", "0", "-qmax", "50", "-crf", "8", "-deadline", "realtime", "-speed", "8", "-b:v", "1M",
         "-vf", `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:0:0:gray`, dest,
       ], { stdio: ["pipe", "ignore", "pipe"] });
       let err = "";

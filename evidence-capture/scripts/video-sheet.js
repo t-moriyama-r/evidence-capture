@@ -18,8 +18,10 @@ async function main() {
   if (!video || !out) throw new Error("使い方: node video-sheet.js <動画.webm> <出力.png> [間隔秒] [列数]");
   if (!/\.webm$/i.test(video)) throw new Error("webm を渡してください(同梱の ffmpeg は H.264 の mp4 を読めません)");
   const step = Number(stepArg || 1), cols = Number(colsArg || 5);
-  const ff = findFfmpeg();
-  const probe = spawnSync(ff, ["-hide_banner", "-i", video], { encoding: "utf8" }).stderr;
+  // 同梱の ffmpeg は版ごとに VP8・VP9 の片方しか読めないので、動画のコーデックを読める版を選ぶ
+  const probe = spawnSync(findFfmpeg(), ["-hide_banner", "-i", video], { encoding: "utf8" }).stderr;
+  const codec = (probe.match(/Video: (\w+)/) || [])[1];
+  const ff = findFfmpeg(codec ? { decodes: codec } : {});
   const m = probe.match(/Duration: (\d+):(\d+):([\d.]+)/);
   if (!m) throw new Error(`動画の長さを読めません: ${video}`);
   const duration = +m[1] * 3600 + +m[2] * 60 + +m[3];
