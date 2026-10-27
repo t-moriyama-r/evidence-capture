@@ -26,6 +26,7 @@ Playwright MCP は使わない(MCP では録画できず、MCP のブラウザ�
 | `annotate.js` | 注釈を描くブラウザ側ヘルパー(capture.js が注入する)。注釈の書式はファイル冒頭のコメント参照 |
 | `compose.js <config.json>` | 修正前・修正後のスクショを**左右に並べた比較画像**を作る |
 | `csv2html.js <in.csv> <out.html> --mark G-P:red` | CSV を列記号付きの表 HTML にする。`--mark` の列範囲は `#mark-1`… の要素になり、注釈の target に使える(注釈モード) |
+| `http2html.js <response.txt> <out.html> --request "GET /api/x"` | `curl -si` の応答とリクエストを 1 枚の HTML にする。JSON の各行は `[data-path="items.0.price"]` で注釈の target に使える。画面の無い API の修正前後を撮るときに使う(下の「画面の無い API の修正」) |
 | `github-attach.js login` / `upload <PR URL> <file>...` | 画像・動画を GitHub の添付(user-attachments)としてアップロードし、PR 本文に貼る文字列を出力する。git にはコミットしない。webm は mp4 に変換して上げる(任意) |
 | `video-sheet.js <動画.webm> <出力.png> [間隔秒] [列数]` | 録った動画を一定間隔で切り出し、時刻付きのコマを並べた一覧画像を作る。動画は Read ツールで読めないので、**録ったら必ずこれで中身を確かめる**(ステップE2 の 5) |
 | `chrome.js` | 共通処理(Chrome の起動・接続、区間だけを録る録画)。Windows / macOS / Linux 対応 |
@@ -214,6 +215,17 @@ Playwright MCP は使わない(MCP では録画できず、MCP のブラウザ�
   - 動画の URL 行は前後を空行で囲み、独立した段落にする
 - ケースごとに「何がどう変わったか」を1行で書く
 - ファイル名は英数字にする(チケットシステムによっては日本語名の添付を本文から参照できない)
+
+### 画面の無い API の修正
+
+画面に出ない API(BE)の修正でも、修正前後のスクショ・動画・比較画像を作る。撮るのは「同じリクエストに対して応答がどう変わったか」。
+
+1. 修正前と修正後の API を起動し、同じリクエストを `curl -si` で送って応答を保存する(`before.txt` / `after.txt`)。リクエストの本文があるときはファイルにして `--request-body` で渡す
+2. `node <skill>/scripts/http2html.js before.txt <tmp>/before.html --request "POST /api/items" --request-body body.json --title "商品の登録"`(after も同じ)
+3. capture.js の `pages[].url` に `file:///<tmp>/before.html` を書き、証跡取得モードと同じ手順で修正前・修正後を撮り、compose.js で並べる
+   - 変わった項目を `"target": "[data-path=\"items.0.price\"]"` で囲み、修正前は赤で「期待値は〇〇だが △△ が返る」、修正後は緑で書く
+   - ステータスが変わる修正は `#status` を囲む。リクエストも写るよう `"clip": ["#request", "#status", "#body"]` にする
+4. 認証のヘッダー(Authorization・Cookie など)は http2html.js が伏せる。本文に個人情報・秘密が入る API は、テスト用のデータで撮る
 
 ## 注釈モード
 

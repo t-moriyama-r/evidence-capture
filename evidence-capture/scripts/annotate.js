@@ -76,10 +76,14 @@ window.__annot = (() => {
       `border-radius:50%;background:${c};color:#fff;font:700 14px/1 ${FONT};vertical-align:-5px">${n}</span>`;
   }
   function box(r, c, fill, num) {
-    // アプリ自身の入力エラー枠と見分けられるよう、対象より少し外側に角丸で描く
+    // アプリ自身の入力エラー枠と見分けられるよう、対象より少し外側に角丸で描く。
+    // 画面の端に接した要素(余白の無い body の中身など)では外側に出した分がページの幅を広げ、
+    // アプリに無い横スクロールが証跡に映るので、左右はページの幅の中に収める
+    const pageW = document.documentElement.clientWidth;
+    const left = Math.max(0, r.x - 6), right = Math.min(pageW, r.x + r.w + 6);
     const d = document.createElement("div");
     Object.assign(d.style, {
-      position: "absolute", left: r.x - 6 + "px", top: r.y - 6 + "px", width: r.w + 12 + "px", height: r.h + 12 + "px",
+      position: "absolute", left: left + "px", top: r.y - 6 + "px", width: right - left + "px", height: r.h + 12 + "px",
       border: `3px solid ${c}`, borderRadius: "6px", background: fill ? c + "1f" : "transparent",
       boxSizing: "border-box", zIndex: 99998, pointerEvents: "none",
     });
@@ -100,8 +104,11 @@ window.__annot = (() => {
   function note(x, y, w, html, c, num) {
     const d = document.createElement("div");
     Object.assign(d.style, {
-      // 幅の指定がなければ文字に合わせる（短文が変な位置で折り返さないように）
-      position: "absolute", left: x + "px", top: y + "px", ...(w ? { width: w + "px" } : { width: "max-content", maxWidth: "460px" }),
+      // 幅の指定がなければ文字に合わせる（短文が変な位置で折り返さないように）。スマホ幅では右端を越えると
+      // ページに横スクロールが出て、横スクロールの有無を見せたい証跡と紛れるので、drawOne が左右に 10px・20px を
+      // 空けて寄せ直しても画面に収まる幅までにする
+      position: "absolute", left: x + "px", top: y + "px",
+      ...(w ? { width: w + "px" } : { width: "max-content", maxWidth: Math.max(200, Math.min(460, document.documentElement.clientWidth - 30)) + "px" }),
       background: "#fffef5", border: `3px solid ${c}`, borderRadius: "6px", padding: "8px 12px", boxSizing: "border-box",
       font: `600 14px/1.55 ${FONT}`, color: "#222",
       boxShadow: "0 3px 10px rgba(0,0,0,.25)", zIndex: 99999, pointerEvents: "none",

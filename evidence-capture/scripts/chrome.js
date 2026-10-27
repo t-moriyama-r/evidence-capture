@@ -174,12 +174,16 @@ async function createRecorder(page, viewport) {
       if (current) await this.pause();
       const fps = 25;
       const { width, height } = viewport;
+      // VP8/VP9(yuv420p)は幅・高さが奇数だと開けない(スマホ幅の 375×667 など)。偶数に切り上げ、増えた 1px は pad で埋める
+      const [outW, outH] = [width + (width % 2), height + (height % 2)];
       const exe = findFfmpeg();
       const ff = spawn(exe, [
         "-loglevel", "error", "-f", "image2pipe", "-framerate", String(fps), "-c:v", "mjpeg", "-i", "pipe:0", "-y", "-an",
         "-c:v", webmCodec(exe), "-qmin", "0", "-qmax", "50", "-crf", "8", "-deadline", "realtime", "-speed", "8", "-b:v", "1M",
-        "-vf", `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:0:0:gray`, dest,
+        "-vf", `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${outW}:${outH}:0:0:gray`, dest,
       ], { stdio: ["pipe", "ignore", "pipe"] });
+      // ffmpeg が先に落ちると stdin への書き込みが write EOF になり、ffmpeg 自身のエラー(close で出す)より先に落ちて原因が隠れる
+      ff.stdin.on("error", () => {});
       let err = "";
       ff.stderr.on("data", (d) => (err += d));
       const done = new Promise((resolve, reject) => ff.on("close", (code) => (code ? reject(new Error(`ffmpeg: ${err}`)) : resolve())));
