@@ -109,8 +109,9 @@ function toMp4(file) {
     throw new Error(`動画を mp4 に変換する ffmpeg がありません。次を実行してから再実行してください:\n  npm install --prefix "${TOOLS}" ffmpeg-static@5.3.0`);
   }
   const mp4 = file.replace(/\.webm$/i, ".mp4");
+  // 縦に長い動画(1400x1900 など)は、既定のスレッド数だと x264 がメモリを確保できずに落ちることがあるため、1 スレッドで書き出す
   const r = require("child_process").spawnSync(ffmpeg, [
-    "-hide_banner", "-loglevel", "error", "-y", "-i", file, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "23",
+    "-hide_banner", "-loglevel", "error", "-y", "-i", file, "-c:v", "libx264", "-threads", "1", "-pix_fmt", "yuv420p", "-crf", "23",
     "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-movflags", "+faststart", "-an", mp4,
   ], { encoding: "utf8" });
   if (r.status !== 0) throw new Error(`${path.basename(file)}: mp4 への変換に失敗しました ${r.stderr || ""}`);
