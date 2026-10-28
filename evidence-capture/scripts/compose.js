@@ -14,7 +14,9 @@
 //       "before": "before_out-of-stock.png", "after": "after_out-of-stock.png",   // outDir からの相対パスも可
 //       "point": "在庫：空欄 → 「0」" },
 //     { "name": "in-stock", "unchanged": true, ... }  // 変更がないことを確かめるケース。修正前の列見出しを緑の「修正前・修正不要」にする
-//   ]
+//   ],
+//   "layout": "column"                      // 修正前を上・修正後を下に並べる(省略時は左右)。CSV の表のような横長の画像は
+//                                           // 左右だと縮んで読めないのでこちらにする。compare[] の要素ごとにも指定できる
 // }
 const fs = require("fs");
 const path = require("path");
@@ -27,6 +29,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<
 
 function compareHtml(cfg, c, beforeUrl, afterUrl) {
   const L = { ...LABELS, ...cfg.labels };
+  const column = (c.layout || cfg.layout) === "column";
   const col = (tag, color, url) => `<div class="col"><div class="tag" style="background:${color}">${esc(tag)}</div><img src="${url}"></div>`;
   return `<!doctype html><html><head><meta charset="utf-8"><style>
     body{margin:0;background:#f4f4f4;font-family:${FONT}}
@@ -34,15 +37,15 @@ function compareHtml(cfg, c, beforeUrl, afterUrl) {
     .head{font-size:20px;font-weight:700;color:#222;margin-bottom:6px}
     .point{display:inline-block;margin:4px 0 14px;padding:8px 14px;background:#fffef5;border:3px solid #2e7d32;border-radius:6px;
       font-size:16px;font-weight:700;color:#222;box-shadow:0 3px 10px rgba(0,0,0,.2)}
-    .row{display:flex;gap:24px;align-items:flex-start}
+    .row{display:flex;gap:${column ? "10px" : "24px"};align-items:flex-start;flex-direction:${column ? "column" : "row"}}
     .col{display:flex;flex-direction:column;gap:8px}
     .tag{align-self:flex-start;color:#fff;font-size:18px;font-weight:700;padding:4px 16px;border-radius:4px}
-    img{max-width:900px;border:1px solid #bbb;box-shadow:0 2px 8px rgba(0,0,0,.15)}
-    .arrow{align-self:center;font-size:44px;color:#555}
+    img{max-width:${column ? "none" : "900px"};border:1px solid #bbb;box-shadow:0 2px 8px rgba(0,0,0,.15)}
+    .arrow{align-self:${column ? "flex-start;margin-left:40px" : "center"};font-size:44px;color:#555}
   </style></head><body><div id="wrap">
     <div class="head">${esc(cfg.title)}${c.title ? "　／　" + esc(c.title) : ""}</div>
     ${c.point ? `<div class="point">${esc(c.point)}</div>` : ""}
-    <div class="row">${c.unchanged ? col(L.unchanged, "#2e7d32", beforeUrl) : col(L.before, "#d32f2f", beforeUrl)}<div class="arrow">➡</div>${col(L.after, "#2e7d32", afterUrl)}</div>
+    <div class="row">${c.unchanged ? col(L.unchanged, "#2e7d32", beforeUrl) : col(L.before, "#d32f2f", beforeUrl)}<div class="arrow">${column ? "⬇" : "➡"}</div>${col(L.after, "#2e7d32", afterUrl)}</div>
   </div></body></html>`;
 }
 

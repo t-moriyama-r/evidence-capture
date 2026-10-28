@@ -21,11 +21,15 @@
 //   "title": "在庫ゼロの商品（商品コード A-100）",     // 帯に小さく出す見出し（証跡取得モード）
 //   "caption": "在庫表示が空欄なのを修正したい",       // 帯に大きく出す一文。何を見る画面かを短く書く（証跡取得モード）
 //   ※ 修正前の期待値と誤りは帯に出さず、吹き出しに「期待値は〇〇だが、△△になっている」と書く
-//   ※ 前提条件(どういうデータか)は capture.js の premise で、検索操作の間だけ枠と吹き出しで出す(showPremise)
+//   ※ 前提条件(どういうデータか)は capture.js の premise で、検索の間と、画面が変わって前提のデータが見えた時点ごとに枠と吹き出しで出す(showPremise)
 //   "annotate": [                                  // 対象要素を枠で囲み、横に吹き出しを付ける
 //     { "target": "table tr", "text": "0期",       // target に一致する要素のうち、text と完全一致するセル/文字を含む最初の要素
-//       "color": "red", "note": "<b>0期</b>：年度の先頭", "pos": "right", "x": 1250, "width": 360, "fill": true }
+//       "color": "red", "note": "<b>0期</b>：年度の先頭", "pos": "right", "x": 1250, "width": 360, "fill": true,
+//       "cells": [ { "col": 5, "label": "申込" }, { "text": "0", "nth": 2 } ] }  // 枠の中で吹き出しが指す数字を円で囲む（下記）
 //   ],
+//   ※ cells: 行など広い枠の中で、吹き出しが述べる値がどれかを円で示す。col は枠内の td/th を左から数えた何列目か（1始まり）、
+//     text はセルの文字との完全一致（同じ文字が並ぶなら nth で何番目か。1始まり）。数字のような短い値は col のほうが取り違えない。
+//     label を書くと円の上に小さく項目名を出す（列見出しが切り抜きの外にあるとき）
 //   "notes": [ { "html": "■ 現状 ...", "color": "red", "width": 700 } ],  // 対象の下に横並びで置く説明
 //   "clip": ["table"],                             // 切り抜きに必ず含める要素（省略時は注釈の対象と吹き出しだけ）
 //   "numbered": true,                              // 枠と吹き出しに番号を振る（証跡取得モードは注釈が2つ以上なら既定で振る）
@@ -70,6 +74,48 @@ window.__annot = (() => {
     // 子孫に text と完全一致する葉要素を持つ最初の要素（表の行を名称で特定する用途）
     return els.find((el) => [el, ...el.querySelectorAll("*")].some((n) => n.children.length === 0 && n.textContent.trim() === text));
   }
+  // 枠の対象 el の中から、円で囲むセルを探す（cells[] の1件。書式は冒頭コメント参照）
+  function findCell(el, c) {
+    const cells = [...el.querySelectorAll("td, th")];
+    if (c.col != null) return cells[c.col - 1];
+    const pool = cells.length ? cells : [...el.querySelectorAll("*")].filter((n) => n.children.length === 0);
+    return pool.filter((n) => n.textContent.trim() === String(c.text))[(c.nth || 1) - 1];
+  }
+  // セルの文字の範囲（セルが横に広くても、数字そのものを囲めるように）。文字がなければセル全体
+  function textRect(cell) {
+    const rg = document.createRange();
+    rg.selectNodeContents(cell);
+    const r = rg.getBoundingClientRect();
+    return r.width && r.height ? { x: r.left + scrollX, y: r.top + scrollY, w: r.width, h: r.height } : rect(cell);
+  }
+  function ring(r, c, label) {
+    // 数字に線がかからないよう余白を取り、1桁でも潰れた楕円にならないよう最小の大きさを持たせる
+    const w = Math.max(r.w + 18, 30), h = Math.max(r.h + 12, 26);
+    const cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+    const d = document.createElement("div");
+    Object.assign(d.style, {
+      position: "absolute", left: cx - w / 2 + "px", top: cy - h / 2 + "px", width: w + "px", height: h + "px",
+      border: `3px solid ${c}`, borderRadius: "50%", boxSizing: "border-box",
+      boxShadow: "0 0 0 2px #fff", zIndex: 99999, pointerEvents: "none",
+    });
+    d.style.setProperty("--annot-c", c + "aa");
+    d.classList.add("__annot-box", "__annot-mark");
+    add(d);
+    const out = [rect(d)];
+    if (label) {
+      const t = document.createElement("div");
+      Object.assign(t.style, {
+        position: "absolute", left: cx + "px", top: cy - h / 2 - 4 + "px", transform: "translate(-50%,-100%)",
+        padding: "1px 6px", background: c, color: "#fff", borderRadius: "4px", whiteSpace: "nowrap",
+        font: `700 12px/1.4 ${FONT}`, zIndex: 99999, pointerEvents: "none",
+      });
+      t.textContent = label;
+      t.classList.add("__annot-mark");
+      add(t);
+      out.push(rect(t));
+    }
+    return out;
+  }
   // 番号の丸。枠と吹き出しの対応を示す
   function badgeHtml(n, c) {
     return `<span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;margin-right:6px;` +
@@ -78,8 +124,8 @@ window.__annot = (() => {
   function box(r, c, fill, num) {
     // アプリ自身の入力エラー枠と見分けられるよう、対象より少し外側に角丸で描く。
     // 画面の端に接した要素(余白の無い body の中身など)では外側に出した分がページの幅を広げ、
-    // アプリに無い横スクロールが証跡に映るので、左右はページの幅の中に収める
-    const pageW = document.documentElement.clientWidth;
+    // アプリに無い横スクロールが証跡に映るので、左右はページの幅の中に収める(画面より横長の表は、その表の幅まで)
+    const pageW = document.documentElement.scrollWidth;
     const left = Math.max(0, r.x - 6), right = Math.min(pageW, r.x + r.w + 6);
     const d = document.createElement("div");
     Object.assign(d.style, {
@@ -147,6 +193,7 @@ window.__annot = (() => {
     const c = color(a.color), r = rect(el);
     const out = [r];
     box(r, c, a.fill !== false, num);
+    for (const cell of a.cells || []) out.push(...ring(textRect(findCell(el, cell)), c, cell.label));
     if (!a.note) return out;
     const w = a.width, pos = a.pos || "right";
     // 吹き出しの位置。right は対象の右端ではなく、表の行のように横長の対象でも重なりすぎない位置（x 指定可）に置く
@@ -155,16 +202,20 @@ window.__annot = (() => {
     else if (pos === "above") { n = note(a.x ?? r.x, 0, w, a.note, c, num); n.style.top = r.y - rect(n).h - 28 + "px"; }
     else if (pos === "left") { n = note(0, r.y - 4, w, a.note, c, num); n.style.left = (a.x ?? r.x - rect(n).w - 50) + "px"; }
     else n = note(a.x ?? r.x + r.w + 50, r.y - 4, w, a.note, c, num);
-    // 画面の右端からはみ出す場合は左に寄せる
-    const right = scrollX + document.documentElement.clientWidth - 20;
+    // 画面の右端からはみ出す場合は左に寄せる。画面より横長の表の右側にある対象は、対象の右端までははみ出してよい
+    // （切り抜きはページ全体から撮るため。画面幅で寄せると吹き出しが対象から離れる）
+    const right = Math.max(scrollX + document.documentElement.clientWidth - 20, r.x + r.w);
     if (a.x == null && rect(n).x + rect(n).w > right) n.style.left = Math.max(scrollX + 10, right - rect(n).w) + "px";
     const nr = rect(n);
     out.push(nr);
     // 吹き出しが対象と重なる（横長の行など）場合は矢印を描かない
     const overlap = nr.x < r.x + r.w && nr.x + nr.w > r.x && nr.y < r.y + r.h && nr.y + nr.h > r.y;
     if (overlap) return out;
-    if (pos === "below") arrow(nr.x + 40, nr.y - 2, nr.x + 40, r.y + r.h + 8, c);
-    else if (pos === "above") arrow(nr.x + 40, nr.y + nr.h + 2, nr.x + 40, r.y - 8, c);
+    // 上下の矢印は、先端を必ず対象の幅の中に置く（吹き出しが寄せられて対象とずれても、対象を指すように斜めにする）
+    const within = (v, lo, hi) => Math.min(Math.max(v, lo), Math.max(lo, hi));
+    const tipX = within(nr.x + 40, r.x + 20, r.x + r.w - 20), tailX = within(tipX, nr.x + 20, nr.x + nr.w - 20);
+    if (pos === "below") arrow(tailX, nr.y - 2, tipX, r.y + r.h + 8, c);
+    else if (pos === "above") arrow(tailX, nr.y + nr.h + 2, tipX, r.y - 8, c);
     else if (pos === "left") arrow(nr.x + nr.w + 2, r.y + r.h / 2, r.x - 10, r.y + r.h / 2, c);
     else arrow(nr.x - 2, r.y + r.h / 2, r.x + r.w + 10, r.y + r.h / 2, c);
     return out;
@@ -191,7 +242,10 @@ window.__annot = (() => {
     const items = [];
     for (const a of spec.annotate || []) {
       const el = find(a.target, a.text);
-      if (el) items.push({ a, el }); else missing.push(a.target + (a.text ? ` (text=${a.text})` : ""));
+      if (!el) { missing.push(a.target + (a.text ? ` (text=${a.text})` : "")); continue; }
+      const lost = (a.cells || []).filter((c) => !findCell(el, c));
+      if (lost.length) { missing.push(...lost.map((c) => `${a.target} の円 ${c.col != null ? `col=${c.col}` : `text=${c.text}`}`)); continue; }
+      items.push({ a, el });
     }
     return { missing, clipParts, items };
   }
@@ -303,18 +357,21 @@ window.__annot = (() => {
     if (!missing.length) avoidMarks();
     return { missing };
   }
-  // 前提条件の枠と吹き出し。検索などの操作をしている間だけ出し、操作が終わったら clearPremise で消す
-  // (常時出すと画面の情報量が増えるため。どういう条件のデータを見ているかを、検索した時点で示す)
+  // 前提条件の枠と吹き出し。p は1件か配列。前の前提を消してから描き、次の showPremise か clearPremise で消える
+  // (常時出すと画面の情報量が増えるため。検索した時点と、画面が変わって前提のデータが見えた時点ごとに示す)
   function showPremise(p) {
     ensureStyle();
     clearPremise();
-    const el = find(p.target, p.text);
-    if (!el) return { missing: [p.target] };
     const before = new Set(document.querySelectorAll(".__annot"));
-    drawOne({ color: p.color || "blue", pos: p.pos || "below", width: p.width || 560, x: p.x, note: `<b>前提</b>：${p.note}` }, el, null);
+    const missing = [];
+    for (const x of Array.isArray(p) ? p : [p]) {
+      const el = find(x.target, x.text);
+      if (!el) { missing.push(x.text ? `${x.target}「${x.text}」` : x.target); continue; }
+      drawOne({ color: x.color || "blue", pos: x.pos || "below", width: x.width || 560, x: x.x, cells: (x.cells || []).filter((c) => findCell(el, c)), note: `<b>前提</b>：${x.note}` }, el, null);
+    }
     document.querySelectorAll(".__annot").forEach((e) => { if (!before.has(e)) e.classList.add("__annot-premise"); });
     avoidMarks();
-    return { missing: [] };
+    return { missing };
   }
   function clearPremise() {
     document.querySelectorAll(".__annot-premise").forEach((e) => e.remove());

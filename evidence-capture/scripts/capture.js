@@ -12,6 +12,8 @@
 //   "outDir": "/tmp/evidence",              // 出力先(リポジトリの外の一時ディレクトリにすること)
 //   "port": 9330,                           // CDP ポート(同時実行する場合はずらす)
 //   "video": true,                          // 動画を録るか(省略時 true)
+//   "apiRewrite": { "from": "https://localhost:8888/", "to": "https://localhost:8889/" },  // API の向き先を差し替える(省略可。
+//                                           // 修正後の API を worktree の検証用コンテナで立てたときに、画面はそのまま修正後を撮る)
 //   "ignoreHTTPSErrors": true,              // 開発サーバーの自己署名証明書を通すか(省略時 true。localhost 以外を撮るなら false 推奨)
 //   "profile": "<Chrome のプロファイルのディレクトリ>", // ログイン済みのプロファイルで撮る(省略時は使い捨て)。GitHub の Actions のログなど、
 //                                           // ログインしないと見られない画面に使う。github-attach.js login のプロファイルを指定できる
@@ -45,13 +47,18 @@
 //       "premise": { "target": "input[name=q]", "note": "在庫が 0 件の商品" },
 //                                           // 前提条件(どういうデータか)。actions の最初から検索の間だけ枠と吹き出しで出し、
 //                                           // actions の { "clearPremise": true } か、actions の終わりで消す(動画のみ。スクショには出さない)
+//                                           // 検索結果・モーダルなど画面が変わるたびに、actions の { "premise": … } で
+//                                           // 前提が満たされていること(対象のデータが見えている/見えていない)を示し直す
 //       "annotate": [ { "target": "span.stock", "color": "green", "note": "「0」と表示される", "pos": "below" } ],
 //       "clip": [ "main" ],                  // スクショに必ず含める範囲(省略時は注釈と対象だけ)
 //       "actions": [ { "click": "セレクタ" }, { "fill": ["セレクタ", "値"] }, { "hover": "セレクタ" }, { "press": "Escape" },
 //                    { "blur": "セレクタ" }, { "waitEnabled": "セレクタ" }, { "waitText": "表示を待つ文字列" },
 //                    { "waitUrl": "/items/" }, { "waitUrlNot": "/login" }, { "waitFor": "セレクタ" }, { "wait": 1000 },
+//                    { "select": ["select のセレクタ", "選択肢の value"] },
 //                    { "scrollTo": "セレクタ" } ]      // scrollTo はカーソルを動かさずにその要素まで画面を送る(既定は画面の中ほど。
 //                    //   "block": "start", "offset": 150 で要素の上端を画面の上から 150px に置く)
+//                    // { "premise": { "target": "table tr", "text": "A-100", "note": "在庫 0 件の商品が一覧に<b>表示されている</b>" } }
+//                    //   … その時点の画面で前提を枠と吹き出しで示す(配列で複数可。"hold" ms 見せる。既定は読める長さ 3〜5 秒)
 //                    // 「何秒で変わるか」を測るときは、click に "timer" を付けて画面右上のタイマーを始め、{ "waitTimer": {} } で止まるのを待つ:
 //                    //   { "click": "button.apply", "timer": { "label": "反映から鍵が外れるまで",
 //                    //     "until": { "selector": "td.e", "state": "notText", "value": "未入力条件あり" } } }, { "waitTimer": { "minMs": 0 } }
@@ -143,6 +150,12 @@ async function runActions(page, actions, { cursor, recorder, beforeResume } = {}
         await loc.fill(resolveValue(a.fill[1]));
       }
     }
+    // select 要素の選択肢を値で選ぶ(例: { "select": ["select[name=semester_id]", "97"] })
+    if (a.select) {
+      const loc = page.locator(a.select[0]).first();
+      if (cursor) await pointAt(page, loc);
+      await loc.selectOption(String(a.select[1]));
+    }
     // ツールチップのようにマウスを重ねている間だけ出る表示に使う。この後の枠・吹き出し・撮影の間も重ねたまま
     if (a.hover) {
       const loc = page.locator(a.hover).first();
@@ -168,6 +181,14 @@ async function runActions(page, actions, { cursor, recorder, beforeResume } = {}
       await recorder.resume();
     }
     if (a.clearPremise) await page.evaluate(() => window.__annot?.clearPremise());
+    // 画面が変わって前提のデータが見えたところで、前提が満たされていることを枠と吹き出しで示し、読める長さだけ見せる。
+    // 前の前提は消える(この前提は次の premise か clearPremise、actions の終わりで消える)
+    if (a.premise) {
+      const { missing } = await page.evaluate((pr) => window.__annot.showPremise(pr), a.premise);
+      if (missing.length) throw new Error(`前提の対象が見つかりません: ${missing.join(" / ")}`);
+      const ps = Array.isArray(a.premise) ? a.premise : [a.premise];
+      await sleep(a.hold ?? readableMs({ annotate: ps }));
+    }
   }
 }
 
@@ -190,7 +211,7 @@ function readableMs({ annotate, notes }) {
 // 帯を出した時点で画面にある、見せる対象(注釈・前提の対象と、操作する場所)の位置(ビューポート座標)。
 // 録画を始める前に帯をよけておき、録画の途中で帯が動くことを減らす。まだ出ていない要素は、描いたとき・操作するときによける
 async function targetBoxes(page, p) {
-  const specs = [...(p.annotate || []), ...(p.premise ? [p.premise] : [])].map((a) => ({ target: a.target, text: a.text }));
+  const specs = [...(p.annotate || []), ...[].concat(p.premise || []), ...(p.actions || []).flatMap((a) => [].concat(a.premise || []))].map((a) => ({ target: a.target, text: a.text }));
   const boxes = await page.evaluate((ts) => ts.flatMap((t) => {
     try {
       const r = window.__annot.find(t.target, t.text)?.getBoundingClientRect();
@@ -239,6 +260,11 @@ async function main() {
     const context = config.profile
       ? chrome.browser.contexts()[0]
       : await chrome.newContext({ ignoreHTTPSErrors, viewport, deviceScaleFactor: 1 });
+    // 画面はそのままで API だけ別のコンテナに向ける(修正後の API を別ポートで立てて撮る場合)
+    if (config.apiRewrite) {
+      const { from, to } = config.apiRewrite;
+      await context.route(`${from}**`, (route) => route.continue({ url: route.request().url().replace(from, to) }));
+    }
     const page = await context.newPage();
     if (config.profile) await page.setViewportSize(viewport);
     // 注釈は addScriptTag で注入するので、CSP でインラインのスクリプトを禁じているサイト(GitHub など)でも描けるようにする
