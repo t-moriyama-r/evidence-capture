@@ -148,6 +148,8 @@ function ffmpegCodecs(exe, flag) {
 
 // 区間だけを録る録画。resume() 〜 pause() の間の画面だけを動画にし、間(ページの読み込み中など)は詰める。
 // Chrome の screencast(画面が変わったときだけフレームが届く)を受け取り、保存時に各フレームの表示時間ぶん複製して 25fps にする。
+const MAX_VIDEO_HEIGHT = 1200;
+
 async function createRecorder(page, viewport) {
   const cdp = await page.context().newCDPSession(page);
   const segments = [];
@@ -173,13 +175,15 @@ async function createRecorder(page, viewport) {
     async save(dest) {
       if (current) await this.pause();
       const fps = 25;
-      const { width, height } = viewport;
+      // libvpx は高さが 1650px ほどを超えるとメモリを確保できずに落ち、webm が 0 バイトになる。縦横比を保って高さを抑える
+      const shrink = Math.min(1, MAX_VIDEO_HEIGHT / viewport.height);
+      const [width, height] = [Math.round(viewport.width * shrink), Math.round(viewport.height * shrink)];
       // VP8/VP9(yuv420p)は幅・高さが奇数だと開けない(スマホ幅の 375×667 など)。偶数に切り上げ、増えた 1px は pad で埋める
       const [outW, outH] = [width + (width % 2), height + (height % 2)];
       const exe = findFfmpeg();
       const ff = spawn(exe, [
         "-loglevel", "error", "-f", "image2pipe", "-framerate", String(fps), "-c:v", "mjpeg", "-i", "pipe:0", "-y", "-an",
-        "-c:v", webmCodec(exe), "-qmin", "0", "-qmax", "50", "-crf", "8", "-deadline", "realtime", "-speed", "8", "-b:v", "1M",
+        "-c:v", webmCodec(exe), "-qmin", "0", "-qmax", "50", "-crf", "8", "-deadline", "realtime", "-speed", "8", "-b:v", "1M", "-threads", "1",
         "-vf", `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${outW}:${outH}:0:0:gray`, dest,
       ], { stdio: ["pipe", "ignore", "pipe"] });
       // ffmpeg が先に落ちると stdin への書き込みが write EOF になり、ffmpeg 自身のエラー(close で出す)より先に落ちて原因が隠れる

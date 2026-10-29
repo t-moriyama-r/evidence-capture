@@ -55,6 +55,7 @@
 //                    { "blur": "セレクタ" }, { "waitEnabled": "セレクタ" }, { "waitText": "表示を待つ文字列" },
 //                    { "waitUrl": "/items/" }, { "waitUrlNot": "/login" }, { "waitFor": "セレクタ" }, { "wait": 1000 },
 //                    { "select": ["select のセレクタ", "選択肢の value"] },
+//                    { "eval": "document.title" }, { "scrollY": 400 | "bottom" }, { "goBack": true },
 //                    { "scrollTo": "セレクタ" } ]      // scrollTo はカーソルを動かさずにその要素まで画面を送る(既定は画面の中ほど。
 //                    //   "block": "start", "offset": 150 で要素の上端を画面の上から 150px に置く)
 //                    // { "premise": { "target": "table tr", "text": "A-100", "note": "在庫 0 件の商品が一覧に<b>表示されている</b>" } }
@@ -164,6 +165,11 @@ async function runActions(page, actions, { cursor, recorder, beforeResume } = {}
       await loc.hover();
     }
     if (a.press) await page.keyboard.press(a.press);
+    // ページの中で JS を動かす(撮影用の目印を足す・状態を表示するなど)。アプリの挙動は変えない使い方に留める
+    if (a.eval) await page.evaluate(a.eval);
+    // 縦の位置で画面を送る。"bottom" で一番下まで
+    if (a.scrollY !== undefined) await page.evaluate((y) => window.scrollTo(0, y === "bottom" ? document.documentElement.scrollHeight : y), a.scrollY);
+    if (a.goBack) await page.goBack();
     if (a.blur) await page.locator(a.blur).first().blur();
     // タイマーが止まるまで待つ(minMs を付けると、タイマーを始めてからその時間がたつまでは待つ)。この待ちは cut しない
     if (a.waitTimer) await waitTimerDone(page, a.waitTimer.minMs ?? 0);
